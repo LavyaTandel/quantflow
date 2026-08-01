@@ -1,0 +1,8 @@
+node_modules/
+dist/
+coverage/
+.local-fixtures/
+.env
+.env.*
+.scratch/
+*.log
