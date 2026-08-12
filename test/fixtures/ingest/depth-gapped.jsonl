@@ -1,0 +1,6 @@
+{"stream":"ethusdt@depth@100ms","data":{"e":"depthUpdate","E":1756200100000,"s":"ETHUSDT","U":100,"u":103,"b":[["3119.50","2.000"]],"a":[["3120.50","3.000"]]}}
+{"stream":"ethusdt@depth@100ms","data":{"e":"depthUpdate","E":1756200100100,"s":"ETHUSDT","U":104,"u":107,"b":[["3119.00","0"],["3118.75","1.500"]],"a":[]}}
+{"stream":"ethusdt@depth@100ms","data":{"e":"depthUpdate","E":1756200100200,"s":"ETHUSDT","U":120,"u":124,"b":[["3117.00","6.000"]],"a":[["3121.00","0.250"]]}}
+{"stream":"ethusdt@depth@100ms","data":{"e":"depthUpdate","E":1756200100300,"s":"ETHUSDT","U":125,"u":126,"b":[],"a":[["3121.25","1.000"]]}}
+{"stream":"ethusdt@depth@100ms","data":{"e":"depthUpdate","E":1756200100400,"s":"ETHUSDT","U":90,"u":95,"b":[["3122.00","9.000"]],"a":[["3123.00","9.000"]]}}
+{"stream":"ethusdt@depth@100ms","data":{"e":"depthUpdate","E":1756200100500,"s":"ETHUSDT","U":200,"u":205,"b":[["3116.50","4.000"]],"a":[["3124.00","2.000"]]}}
