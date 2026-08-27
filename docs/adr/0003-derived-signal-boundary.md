@@ -1,0 +1,3 @@
+# External tenants never receive raw ticks; only throttled Derived Signals
+
+External tenants receive only throttled Derived Signals (score/label+confidence+horizon over a rolling window, ≤1 per symbol per 1–5 s, venue-entitled) computed from a short-lived internal NormalizedEvent window held in Redis. The raw NormalizedEvent pipeline (Redis ZSET hot book + Mongo time-series) stays internal. We chose this because Coinbase §3 and OKX §9.4 ban external dissemination of raw or substantially similar Market Data and even Derived Works trained on it, so a raw fan-out would be redistribution under another name; the alternative — adopting ccxt's unified API for multi-venue breadth past three venues — remains the documented trigger when per-venue hand-rolling stops being cheap.
