@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>QuantFlow.io live tape</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      body {
+        margin: 0 auto;
+        max-width: 720px;
+        padding: 0 16px 32px;
+        background: #0b0e14;
+        color: #c9d1d9;
+        font:
+          13px/1.5 ui-monospace,
+          Consolas,
+          monospace;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        padding: 14px 0;
+        border-bottom: 1px solid #21262d;
+      }
+      h1 {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 600;
+        color: #e6edf3;
+      }
+      .badge {
+        padding: 2px 10px;
+        border-radius: 999px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .badge.connecting {
+        background: #2d2406;
+        color: #d29922;
+      }
+      .badge.live {
+        background: #0c2e1a;
+        color: #3fb950;
+      }
+      .badge.reconnecting {
+        background: #3a1212;
+        color: #f85149;
+      }
+      .meter {
+        margin-left: auto;
+        color: #8b949e;
+        font-size: 12px;
+      }
+      table {
+        width: 100%;
+        margin-top: 16px;
+        border-collapse: collapse;
+      }
+      th,
+      td {
+        padding: 4px 10px;
+        text-align: right;
+        border-bottom: 1px solid #161b22;
+        font-variant-numeric: tabular-nums;
+      }
+      thead th {
+        color: #8b949e;
+        font-weight: 400;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+      }
+      tbody th {
+        text-align: left;
+        font-weight: 400;
+        color: #58a6ff;
+      }
+      tr.flash-up {
+        animation: flashUp 0.7s ease-out;
+      }
+      tr.flash-down {
+        animation: flashDown 0.7s ease-out;
+      }
+      @keyframes flashUp {
+        0% {
+          background: rgba(63, 185, 80, 0.3);
+        }
+        100% {
+          background: transparent;
+        }
+      }
+      @keyframes flashDown {
+        0% {
+          background: rgba(248, 81, 73, 0.3);
+        }
+        100% {
+          background: transparent;
+        }
+      }
+      #tape {
+        max-height: 55vh;
+        overflow-y: auto;
+        margin: 16px 0 0;
+        padding: 0;
+        list-style: none;
+        border: 1px solid #161b22;
+        border-radius: 6px;
+      }
+      #tape li {
+        display: flex;
+        gap: 10px;
+        align-items: baseline;
+        padding: 3px 10px;
+        border-bottom: 1px solid #10151d;
+        animation: slideIn 0.25s ease-out;
+        font-variant-numeric: tabular-nums;
+      }
+      @keyframes slideIn {
+        from {
+          opacity: 0;
+          transform: translateY(-4px);
+        }
+      }
+      #tape time {
+        min-width: 92px;
+        color: #8b949e;
+        font-size: 12px;
+      }
+      #tape .sym {
+        min-width: 84px;
+        color: #58a6ff;
+      }
+      #tape .glyph {
+        width: 16px;
+        text-align: center;
+      }
+      #tape .row.trade .glyph {
+        color: #d2a8ff;
+      }
+      #tape .row.bbo .glyph {
+        color: #3fb950;
+      }
+      #tape .row.depth .glyph {
+        color: #d29922;
+      }
+      #tape .detail {
+        margin-left: auto;
+        color: #e6edf3;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>QuantFlow.io live tape</h1>
+      <span id="status" class="badge connecting">connecting</span>
+      <span class="meter"><span id="rate">0 msgs/s</span> · <span id="bad">0 malformed</span></span>
+    </header>
+    <section>
+      <table id="topbook">
+        <thead>
+          <tr>
+            <th>symbol</th>
+            <th>bid</th>
+            <th>ask</th>
+            <th>mid</th>
+            <th>spread bps</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+    <ul id="tape"></ul>
+    <script>
+      (() => {
+        const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'ADAUSDT'];
+        const KNOWN = new Set(SYMBOLS);
+        const GLYPH = { trade: '◆', bbo: '⇅', depth: '≡' };
+        const MAX_ROWS = 200;
+
+        const statusEl = document.getElementById('status');
+        const rateEl = document.getElementById('rate');
+        const badEl = document.getElementById('bad');
+        const tapeEl = document.getElementById('tape');
+        const tbody = document.querySelector('#topbook tbody');
+
+        const rows = new Map();
+        for (const sym of SYMBOLS) {
+          const tr = document.createElement('tr');
+          for (const cell of [sym, '–', '–', '–', '–']) {
+            const el = document.createElement(cell === sym ? 'th' : 'td');
+            el.textContent = cell;
+            tr.append(el);
+          }
+          const [bid, ask, mid, sprd] = [...tr.querySelectorAll('td')];
+          tbody.append(tr);
+          rows.set(sym, { tr, bid, ask, mid, sprd, lastMid: null });
+        }
+
+        const fmt = (n) =>
+          Number.isFinite(n) ? n.toLocaleString('en-US', { maximumFractionDigits: 8 }) : '–';
+        const stamp = (ms) => {
+          const d = new Date(ms);
+          const p = (n, w = 2) => String(n).padStart(w, '0');
+          return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+        };
+
+        const recent = [];
+        setInterval(() => (rateEl.textContent = `${recent.length} msgs/s`), 250);
+
+        let malformed = 0;
+        const countBad = () => (badEl.textContent = `${++malformed} malformed`);
+
+        function flash(tr, up) {
+          tr.classList.remove('flash-up', 'flash-down');
+          void tr.offsetWidth; // restart the CSS animation
+          tr.classList.add(up ? 'flash-up' : 'flash-down');
+        }
+
+        function topOfBook(f) {
+          const row = rows.get(f.s);
+          const mid = (f.bp + f.ap) / 2;
+          const spreadBps = mid > 0 ? ((f.ap - f.bp) / mid) * 1e4 : NaN;
+          row.bid.textContent = fmt(f.bp);
+          row.ask.textContent = fmt(f.ap);
+          row.mid.textContent = fmt(mid);
+          row.sprd.textContent = Number.isFinite(spreadBps) ? spreadBps.toFixed(2) : '–';
+          if (row.lastMid !== null && mid !== row.lastMid) flash(row.tr, mid > row.lastMid);
+          row.lastMid = mid;
+        }
+
+        function tapeRow(f) {
+          const li = document.createElement('li');
+          li.className = `row ${f.t}`;
+          const detail =
+            f.t === 'trade'
+              ? fmt(f.p)
+              : f.t === 'bbo'
+                ? `${fmt(f.bp)} / ${fmt(f.ap)}`
+                : `+${f.n} levels`;
+          li.innerHTML =
+            `<time>${stamp(f.ts)}</time>` +
+            `<span class="sym">${f.s}</span>` +
+            `<span class="glyph">${GLYPH[f.t]}</span>` +
+            `<span class="detail">${detail}</span>`;
+          tapeEl.prepend(li);
+          while (tapeEl.childElementCount > MAX_ROWS) tapeEl.lastElementChild.remove();
+        }
+
+        function validate(f) {
+          if (typeof f !== 'object' || f === null || !KNOWN.has(f.s) || !Number.isFinite(f.ts))
+            return false;
+          if (f.t === 'trade') return Number.isFinite(f.p) && Number.isFinite(f.q);
+          if (f.t === 'bbo') return [f.bp, f.bq, f.ap, f.aq].every(Number.isFinite);
+          if (f.t === 'depth') return Number.isInteger(f.n) && f.n >= 0;
+          return false;
+        }
+
+        function onMessage(raw) {
+          const now = Date.now();
+          recent.push(now);
+          while (now - recent[0] > 1000) recent.shift();
+          if (typeof raw !== 'string') return;
+          let f;
+          try {
+            f = JSON.parse(raw);
+          } catch {
+            countBad();
+            return;
+          }
+          if (f.t === 'hello') {
+            statusEl.title = `stages: ${(f.stages ?? []).join(', ')}`;
+            return;
+          }
+          if (!validate(f)) {
+            countBad();
+            return;
+          }
+          tapeRow(f);
+          if (f.t === 'bbo') topOfBook(f);
+        }
+
+        let attempt = 0;
+        const setBadge = (state) => {
+          statusEl.className = `badge ${state}`;
+          statusEl.textContent = state;
+        };
+        function reconnect() {
+          const delayMs = Math.min(5000, 250 * 2 ** attempt++);
+          setTimeout(connect, delayMs);
+        }
+        function connect() {
+          setBadge(attempt === 0 ? 'connecting' : 'reconnecting');
+          let ws;
+          try {
+            ws = new WebSocket(`ws://${location.host}/ws`);
+          } catch {
+            reconnect();
+            return;
+          }
+          ws.onopen = () => {
+            attempt = 0;
+            setBadge('live');
+          };
+          ws.onmessage = (e) => onMessage(e.data);
+          ws.onclose = () => {
+            setBadge('reconnecting');
+            reconnect();
+          };
+          ws.onerror = () => ws.close();
+        }
+        connect();
+      })();
+    </script>
+  </body>
+</html>
