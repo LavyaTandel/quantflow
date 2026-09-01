@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>LedgerGuard Gateway Prototype — PROTOTYPE, wipe me</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 900px;
+        margin: 24px auto;
+        padding: 0 16px;
+        background: #fafafa;
+      }
+      h1 {
+        font-size: 1.4em;
+      }
+      h2 {
+        font-size: 1.15em;
+        margin-top: 28px;
+        border-bottom: 1px solid #ddd;
+        padding-bottom: 4px;
+      }
+      .tabs {
+        display: flex;
+        gap: 8px;
+        margin: 16px 0;
+      }
+      .tabs button {
+        padding: 6px 12px;
+        cursor: pointer;
+        border: 1px solid #ccc;
+        background: #eee;
+      }
+      .tabs button.active {
+        background: #0a6;
+        color: #fff;
+        border-color: #0a6;
+      }
+      .panel {
+        display: none;
+        border: 1px solid #ddd;
+        background: #fff;
+        padding: 16px;
+      }
+      .panel.active {
+        display: block;
+      }
+      button.action {
+        margin: 4px 6px 4px 0;
+        padding: 6px 10px;
+      }
+      pre {
+        background: #111;
+        color: #0f0;
+        padding: 12px;
+        overflow: auto;
+        max-height: 300px;
+        font-size: 13px;
+      }
+      .state {
+        font-family: monospace;
+        font-size: 13px;
+        white-space: pre-wrap;
+        background: #fff;
+        border: 1px solid #ddd;
+        padding: 8px;
+      }
+      .note {
+        color: #666;
+        font-size: 0.9em;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>
+      LedgerGuard Gateway Prototype
+      <span style="color: #c00; font-weight: normal">[PROTOTYPE — in-memory, no persistence]</span>
+    </h1>
+    <p class="note">
+      Throwaway logic demo for <code>POST /api/ledger/transfer</code> +
+      <code>GET /api/ledger/balance</code> behind
+      <code>authenticate</code>/<code>rateLimiter</code>. State lives in memory. Run by opening this
+      file. Nothing here is production.
+    </p>
+
+    <div class="tabs">
+      <button class="active" onclick="showTab(0)">1. Tenant Isolation</button>
+      <button onclick="showTab(1)">2. Double-Spend</button>
+      <button onclick="showTab(2)">3. Idempotency</button>
+      <button onclick="showTab(3)">4. Fencing</button>
+      <button onclick="showTab(4)">Free Play</button>
+    </div>
+
+    <div id="panels">
+      <div class="panel active">
+        <h2>Tenant Isolation — second tenant's ledger is isolated from the first's</h2>
+        <p>
+          Create two tenants (qf_*) via <code>TenantStore</code>, fund <code>alice/USDT</code> for
+          each tenant separately, transfer in tenant A, verify tenant B balance unchanged.
+        </p>
+        <button class="action" onclick="runIsolation()">Run isolation demo</button>
+        <div id="iso-state" class="state"></div>
+      </div>
+      <div class="panel">
+        <h2>Double-Spend — strict per-account serializable</h2>
+        <p>
+          Account <code>alice/USDT</code> balance 100 v5. Two concurrent <code>debit 60</code> with
+          <code>expectedVersion=5</code>. Only one may succeed.
+        </p>
+        <button class="action" onclick="runDoubleSpend()">Run double-spend demo</button>
+        <div id="ds-state" class="state"></div>
+      </div>
+      <div class="panel">
+        <h2>Idempotency — same key returns same Transaction</h2>
+        <p>
+          Retry <code>POST /transfer</code> with same <code>Idempotency-Key</code> must not
+          double-debit.
+        </p>
+        <button class="action" onclick="runIdempotency()">Run idempotency demo</button>
+        <div id="idem-state" class="state"></div>
+      </div>
+      <div class="panel">
+        <h2>Fencing — stale lock holder fenced</h2>
+        <p>
+          Holder A acquires <code>ledger:lock:{tenant}:{account}</code> (fence 1), stalls past TTL,
+          holder B acquires fence 2. A's delayed produce with fence 1 must be rejected on
+          materialize.
+        </p>
+        <button class="action" onclick="runFencing()">Run fencing demo</button>
+        <div id="fence-state" class="state"></div>
+      </div>
+      <div class="panel">
+        <h2>Free Play</h2>
+        <p>
+          Drive the state machine directly. All actions go through <code>LedgerService</code> with
+          <code>MemoryLedgerStore</code> + fenced <code>FakeRedis</code> +
+          <code>FakeKafkaProducer</code> (hermetic, in-memory).
+        </p>
+        <div>
+          <button class="action" onclick="freeCreateTenant()">Create tenant</button>
+          <button class="action" onclick="freeCreateAccount()">
+            Create account (alice/USDT 100)
+          </button>
+          <button class="action" onclick="freeTransfer()">Transfer 10</button>
+          <button class="action" onclick="freeBalance()">Read balance</button>
+          <button class="action" onclick="freeDump()">Dump full state</button>
+        </div>
+        <pre id="free-log"></pre>
+        <div id="free-state" class="state"></div>
+      </div>
+    </div>
+
+    <pre id="log"></pre>
+
+    <script>
+      // --- Minimal in-memory LedgerService mirroring src/ledger/* semantics ---
+      let seq = 0;
+      const tenants = new Map();
+      const accounts = new Map(); // key tenantId:accountId:asset -> {balance, version, lastFencing}
+      const txs = new Map(); // idempotencyKey -> tx
+      const fenceCounters = new Map(); // tenant:account:asset -> counter
+      function keyFor(t, a, s) {
+        return `${t}:${a}:${s}`;
+      }
+      function log(msg) {
+        document.getElementById('log').textContent += msg + '\n';
+        const el = document.getElementById('log');
+        el.scrollTop = el.scrollHeight;
+      }
+      function stateDump(elId, obj) {
+        document.getElementById(elId).textContent = JSON.stringify(obj, null, 2);
+      }
+      function rndId() {
+        return 'tx_' + ++seq + '_' + Math.random().toString(36).slice(2, 6);
+      }
+      function createTenantSim(name) {
+        const id = 'ten_' + Math.random().toString(36).slice(2, 8);
+        const apiKey =
+          'qf_' + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
+        const t = { id, name, apiKey, tier: 'pro' };
+        tenants.set(id, t);
+        log(`tenant ${name} → ${id} apiKey=${apiKey}`);
+        return t;
+      }
+      function ensureAccount(tid, aid, asset, initBal) {
+        const k = keyFor(tid, aid, asset);
+        if (!accounts.has(k))
+          accounts.set(k, {
+            balance: initBal,
+            version: 0,
+            lastFencing: 0,
+            createdAt: new Date().toISOString(),
+          });
+        return accounts.get(k);
+      }
+      function fencingNext(tid, aid, asset) {
+        const k = keyFor(tid, aid, asset);
+        const n = (fenceCounters.get(k) || 0) + 1;
+        fenceCounters.set(k, n);
+        return n;
+      }
+      function tryTransfer(tid, aid, asset, amount, idempotencyKey, expectedVersion) {
+        const k = keyFor(tid, aid, asset);
+        const acct = accounts.get(k);
+        if (!acct) return { error: 'account not found', k };
+        // idempotency dedupe per tenant
+        const idemKey = tid + ':' + idempotencyKey;
+        if (txs.has(idemKey)) return { idemHit: txs.get(idemKey), current: { ...acct } };
+        // fencing
+        const fence = fencingNext(tid, aid, asset);
+        if (fence <= acct.lastFencing)
+          return {
+            conflict: { fenced: true, currentVersion: acct.version, currentBalance: acct.balance },
+          };
+        // version check
+        if (expectedVersion !== undefined && expectedVersion !== acct.version) {
+          return { conflict: { currentVersion: acct.version, currentBalance: acct.balance } };
+        }
+        if (acct.balance < amount)
+          return {
+            conflict: {
+              currentVersion: acct.version,
+              currentBalance: acct.balance,
+              reason: 'insufficient',
+            },
+          };
+        // CAS
+        const prevVersion = acct.version;
+        acct.balance -= amount;
+        acct.version += 1;
+        acct.lastFencing = fence;
+        const tx = {
+          id: rndId(),
+          tenantId: tid,
+          accountId: aid,
+          asset,
+          type: 'debit',
+          amount,
+          prevVersion,
+          idempotencyKey,
+          fencingToken: fence,
+          kafkaOffset: seq,
+        };
+        txs.set(idemKey, tx);
+        return { tx, account: { ...acct } };
+      }
+      function showTab(n) {
+        document
+          .querySelectorAll('.tabs button')
+          .forEach((b, i) => b.classList.toggle('active', i === n));
+        document
+          .querySelectorAll('.panel')
+          .forEach((p, i) => p.classList.toggle('active', i === n));
+      }
+      // --- Guided demos ---
+      function runIsolation() {
+        tenants.clear();
+        accounts.clear();
+        txs.clear();
+        fenceCounters.clear();
+        seq = 0;
+        const tA = createTenantSim('Acme');
+        const tB = createTenantSim('Globex');
+        ensureAccount(tA.id, 'alice', 'USDT', 100);
+        ensureAccount(tB.id, 'alice', 'USDT', 100);
+        const rA = tryTransfer(tA.id, 'alice', 'USDT', 30, 'iso-a-1', 0);
+        const bA = accounts.get(keyFor(tA.id, 'alice', 'USDT'));
+        const bB = accounts.get(keyFor(tB.id, 'alice', 'USDT'));
+        stateDump('iso-state', {
+          tenantA: { id: tA.id, balance: bA.balance, version: bA.version },
+          tenantB: { id: tB.id, balance: bB.balance, version: bB.version },
+          transferA: rA.tx,
+          isolation: bB.balance === 100 ? 'PASS — B untouched' : 'FAIL',
+        });
+        log('isolation: A debited 30 → B still 100');
+      }
+      function runDoubleSpend() {
+        tenants.clear();
+        accounts.clear();
+        txs.clear();
+        fenceCounters.clear();
+        seq = 0;
+        const t = createTenantSim('Acme');
+        ensureAccount(t.id, 'alice', 'USDT', 100);
+        // version is 0
+        const r1 = tryTransfer(t.id, 'alice', 'USDT', 60, 'ds-1', 0);
+        const r2 = tryTransfer(t.id, 'alice', 'USDT', 60, 'ds-2', 0); // stale expectedVersion
+        const acct = accounts.get(keyFor(t.id, 'alice', 'USDT'));
+        stateDump('ds-state', {
+          first: r1.tx || r1.conflict,
+          second: r2.tx || r2.conflict,
+          final: acct,
+          verdict: r1.tx && r2.conflict ? 'PASS — one succeeds, one 409' : 'FAIL',
+        });
+        log(
+          `double-spend: first ${r1.tx ? 'ok' : '409'}, second ${r2.tx ? 'ok' : '409'} → balance ${acct.balance} v${acct.version}`,
+        );
+      }
+      function runIdempotency() {
+        tenants.clear();
+        accounts.clear();
+        txs.clear();
+        fenceCounters.clear();
+        seq = 0;
+        const t = createTenantSim('Acme');
+        ensureAccount(t.id, 'alice', 'USDT', 100);
+        const r1 = tryTransfer(t.id, 'alice', 'USDT', 20, 'idem-XYZ', 0);
+        const bal1 = accounts.get(keyFor(t.id, 'alice', 'USDT')).balance;
+        const r2 = tryTransfer(t.id, 'alice', 'USDT', 20, 'idem-XYZ', 0);
+        const bal2 = accounts.get(keyFor(t.id, 'alice', 'USDT')).balance;
+        stateDump('idem-state', {
+          first: r1.tx,
+          second: r2,
+          balanceAfterFirst: bal1,
+          balanceAfterSecond: bal2,
+          verdict: r2.idemHit && bal1 === bal2 ? 'PASS — same tx, no double debit' : 'FAIL',
+        });
+        log(`idempotency: bal ${bal1} → ${bal2} ${r2.idemHit ? 'hit' : 'miss'}`);
+      }
+      function runFencing() {
+        tenants.clear();
+        accounts.clear();
+        txs.clear();
+        fenceCounters.clear();
+        seq = 0;
+        const t = createTenantSim('Acme');
+        ensureAccount(t.id, 'alice', 'USDT', 100);
+        // holder A gets fence 1
+        const f1 = fencingNext(t.id, 'alice', 'USDT'); // 1
+        // holder B gets fence 2 (A stalled past TTL)
+        const f2 = fencingNext(t.id, 'alice', 'USDT'); // 2
+        // A tries to materialize with fence 1 -> fenced
+        const acct = accounts.get(keyFor(t.id, 'alice', 'USDT'));
+        acct.lastFencing = 2; // B already materialized
+        const staled = f1 <= acct.lastFencing;
+        stateDump('fence-state', {
+          holderA: { fence: f1 },
+          holderB: { fence: f2 },
+          lastFencing: acct.lastFencing,
+          staleRejected: staled,
+          verdict: staled ? 'PASS — stale fenced' : 'FAIL',
+        });
+        log(
+          `fencing: A fence ${f1} vs last ${acct.lastFencing} → ${staled ? 'rejected' : 'applied'}`,
+        );
+      }
+      // free play helpers
+      let freeTenant = null;
+      function freeCreateTenant() {
+        freeTenant = createTenantSim('free-' + Math.random().toString(36).slice(2, 4));
+        document.getElementById('free-log').textContent += `created ${freeTenant.id}\n`;
+      }
+      function freeCreateAccount() {
+        if (!freeTenant) freeTenant = createTenantSim('free');
+        ensureAccount(freeTenant.id, 'alice', 'USDT', 100);
+        freeDump();
+      }
+      function freeTransfer() {
+        if (!freeTenant) return alert('create tenant/account first');
+        const acct = accounts.get(keyFor(freeTenant.id, 'alice', 'USDT'));
+        const r = tryTransfer(
+          freeTenant.id,
+          'alice',
+          'USDT',
+          10,
+          'free-' + Date.now(),
+          acct ? acct.version : 0,
+        );
+        document.getElementById('free-log').textContent += JSON.stringify(r, null, 2) + '\n';
+        freeDump();
+      }
+      function freeBalance() {
+        if (!freeTenant) return alert('create tenant/account first');
+        const acct = accounts.get(keyFor(freeTenant.id, 'alice', 'USDT'));
+        document.getElementById('free-log').textContent +=
+          `balance: ${acct ? JSON.stringify(acct) : 'no account'}\n`;
+        freeDump();
+      }
+      function freeDump() {
+        const dump = {
+          tenants: [...tenants.values()].map((t) => ({ id: t.id, name: t.name })),
+          accounts: [...accounts.entries()].map(([k, v]) => ({ k, ...v })),
+          txCount: txs.size,
+        };
+        document.getElementById('free-state').textContent = JSON.stringify(dump, null, 2);
+      }
+    </script>
+  </body>
+</html>
