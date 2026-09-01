@@ -1,0 +1,3 @@
+# LedgerGuard uses strict per-account serializability via Redlock fencing, not optimistic retries
+
+Per-accountId ledger appends must be linearizable: two concurrent debits against the same Ledger Account may not both overdraw. We enforce `SET ledger:lock:{tenant}:{account}:{asset} NX PX 8–10 s` with an `INCR` fencing token checked before materializing, plus Kafka topic `ledger-{tenantId}` keyed by `accountId` and Mongo CAS on `version`. The alternative — optimistic `expectedVersion` retries without a lock — would raise throughput but push 409 handling to every caller and still needs fencing after TTL expiry; we chose correctness over throughput, with the documented `qf_*` tenant isolation reused.

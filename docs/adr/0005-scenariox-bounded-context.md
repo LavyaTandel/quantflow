@@ -1,0 +1,3 @@
+# ScenarioX is a separate bounded context with its own glossary, not a section of the market-data ledger
+
+ScenarioX introduces `Portfolio`/`Position`/`VaR` which collide with `Ledger Account`/`Order Book` language and has distinct consistency needs (CRDT merge vs strict per-account serializability). We give it `src/scenariox/CONTEXT.md` behind `CONTEXT-MAP.md` and a thin `worker_threads` wrapper first, with `piscina` and `Automerge` as documented fallbacks, because renaming `Position` vs `Ledger Account` later would be painful and a single flat glossary would hide the real trade-off between single and multi-context.
