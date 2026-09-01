@@ -6,3 +6,6 @@ coverage/
 .env.*
 .scratch/
 *.log
+token.txt
+.token
+.gh-token
