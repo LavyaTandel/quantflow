@@ -4,7 +4,7 @@ A real-time crypto market-data pipeline: WebSocket ingestion (Binance Spot prima
 
 ## Status
 
-v1 flagship **implemented and benchmarked**. All four subsystems are built, tested (172 vitest tests across 20 suites, strict TypeScript; Binance ingestion live-proven, Kraken Spot v2 fallback adapter built behind a flag-gated smoke), and measured on the reference host — results with full methodology live in [`docs/benchmarks/`](docs/benchmarks/README.md):
+v1 flagship **implemented and benchmarked**. All four subsystems are built, tested (335 vitest tests across 42 suites, strict TypeScript; Binance ingestion live-proven, Kraken Spot v2 fallback adapter built behind a flag-gated smoke), and measured on the reference host — results with full methodology live in [`docs/benchmarks/`](docs/benchmarks/README.md):
 
 | Suite row          | Result                                                                                                                                                                |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -45,18 +45,20 @@ Prerequisites:
 
 ## Repo map
 
-| Path               | Contents                                                                                                                                                                  |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/ingest/`      | Binance socket (budgeted reconnect/backoff), normalizer, bounded pipeline, JSONL replay                                                                                   |
-| `src/book/`        | Order-book state: continuity logic, memory + Redis-ZSET stores, snapshot bootstrap                                                                                        |
-| `src/store/`       | Tick buffer, flush service, MongoDB time-series sink                                                                                                                      |
-| `test/`            | Vitest suites — fully hermetic; no test touches a live socket or database                                                                                                 |
-| `scripts/`         | Live smoke + benchmark harness (`scripts/bench/`)                                                                                                                         |
-| `docs/benchmarks/` | Locked methodology + measured results (append-only evidence)                                                                                                              |
-| `docs/blog/`       | Draft engineering post built from the benchmark arc                                                                                                                       |
-| `CONTEXT.md`       | Domain glossary — read before naming concepts                                                                                                                             |
-| `docs/adr/`        | Decision records ([0001](docs/adr/0001-recorded-fixtures-stay-local.md): fixture/legal policy; [0002](docs/adr/0002-v1-is-book-state-not-a-matching-engine.md): v1 scope) |
-| `DATA_SOURCES.md`  | Per-venue data-source roles and fixture rules                                                                                                                             |
+| Path                  | Contents                                                                                                                                                                  |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/ingest/`         | Binance socket (budgeted reconnect/backoff), normalizer, bounded pipeline, JSONL replay                                                                                   |
+| `src/book/`           | Order-book state: continuity logic, memory + Redis-ZSET stores, snapshot bootstrap                                                                                        |
+| `src/store/`          | Tick buffer, flush service, MongoDB time-series sink                                                                                                                      |
+| `test/`               | Vitest suites — fully hermetic; no test touches a live socket or database                                                                                                 |
+| `scripts/`            | Live smoke + benchmark harness (`scripts/bench/`) + `wizard-github-push.sh` (repeatable setup)                                                                            |
+| `docs/benchmarks/`    | Locked methodology + measured results (append-only evidence)                                                                                                              |
+| `docs/blog/`          | Draft engineering post built from the benchmark arc                                                                                                                       |
+| `docs/system-design/` | HLD+LLD single source — `01-hld.md` (C4 L1/L2, NFRs, capacity + failure modes, 1M scaling note) + `02-lld.md` + `03-data-model.md` + `04-sequence-diagrams.md` + `assets/` (demo GIFs) |
+| `docs/evidence/`      | Promoted Evidence Dossier — sanitized `resume-bullets.md` + `interview-talking-points.md` (`[measured]` preserved, private tracking stripped)                            |
+| `CONTEXT.md`          | Domain glossary — read before naming concepts                                                                                                                             |
+| `docs/adr/`           | Decision records ([0001](docs/adr/0001-recorded-fixtures-stay-local.md): fixture/legal policy; [0002](docs/adr/0002-v1-is-book-state-not-a-matching-engine.md): v1 scope) |
+| `DATA_SOURCES.md`     | Per-venue data-source roles and fixture rules                                                                                                                             |
 
 ## Issue tracker
 
